@@ -3,6 +3,7 @@ import { fmtHM, HOUR, wrapDay, DAY, clamp } from '../core/math';
 import { pixelDigitsSVG } from '../render/canvas';
 import { icon, IconName } from './icons';
 import { Levels } from '../audio/audio';
+import { WeatherId } from '../core/weather';
 
 export type PresetId = 'now' | 'dawn' | 'morning' | 'afternoon' | 'dusk' | 'night' | 'fireworks';
 
@@ -16,9 +17,19 @@ const PRESETS: { id: PresetId; icon: IconName; label: string; note?: string }[] 
   { id: 'fireworks', icon: 'firework', label: '烟花', note: '庆典' },
 ];
 
+const WEATHERS: { id: WeatherId; icon: IconName; label: string; note?: string }[] = [
+  { id: 'auto', icon: 'now', label: '自动', note: '随时间' },
+  { id: 'sunny', icon: 'sun', label: '晴' },
+  { id: 'cloudy', icon: 'cloudSun', label: '多云' },
+  { id: 'overcast', icon: 'cloud', label: '阴' },
+  { id: 'rain', icon: 'rain', label: '雨' },
+  { id: 'snow', icon: 'snow', label: '雪' },
+];
+
 export interface UIHooks {
   onEnter(): void;
   onPreset(id: PresetId): void;
+  onWeather(id: WeatherId): void;
   onScrub(sec: number): void;
   onFirework(): void;
   onShot(): void;
@@ -49,7 +60,7 @@ export class UIManager {
   private cache: Record<string, string> = {};
   private idleTimer = 0;
   private scrubbing = false;
-  private open: 'time' | 'audio' | null = null;
+  private open: 'time' | 'audio' | 'weather' | null = null;
   private introFlag: { frames: HTMLCanvasElement[]; ctx: CanvasRenderingContext2D; raf: number } | null = null;
   private shotUrl: string | null = null;
 
@@ -113,6 +124,7 @@ export class UIManager {
 
       <div id="toolbar" class="toolbar">
         <button class="tb-btn" id="btnTime" data-tip="时间">${icon('clock')}</button>
+        <button class="tb-btn" id="btnWeather" data-tip="天气">${icon('cloudSun')}</button>
         <button class="tb-btn" id="btnFw" data-tip="释放一枚烟花">${icon('firework')}</button>
         <button class="tb-btn" id="btnShot" data-tip="保存此刻">${icon('camera')}</button>
         <button class="tb-btn" id="btnSound" data-tip="单击切换音量 · 长按打开混音">${icon('sound')}</button>
@@ -142,6 +154,22 @@ export class UIManager {
             <input id="slider" type="range" min="${SLIDER_MIN}" max="${SLIDER_MAX}" step="30" />
           </div>
           <div class="slider-scale"><span>04:00</span><span>10:00</span><span>16:00</span><span>22:00</span><span>04:00</span></div>
+        </div>
+      </div>
+
+      <div id="weatherPanel" class="panel px-box">
+        <div class="panel-head">
+          <div><div class="panel-title">天气</div><div class="panel-sub">切换广场天气，云雨将平滑过渡</div></div>
+          <button class="panel-close" data-close>${icon('close', 1)}</button>
+        </div>
+        <div class="presets weather-presets">
+          ${WEATHERS.map(
+            (w) => `<button class="preset" data-weather="${w.id}" data-wico="${w.id}">
+              <span class="preset-ico">${icon(w.icon)}</span>
+              <span class="preset-label">${w.label}</span>
+              ${w.note ? `<span class="preset-note">${w.note}</span>` : ''}
+            </button>`,
+          ).join('')}
         </div>
       </div>
 
@@ -198,6 +226,7 @@ export class UIManager {
 
     // 工具栏
     this.$('btnTime').addEventListener('click', () => this.toggle('time'));
+    this.$('btnWeather').addEventListener('click', () => this.toggle('weather'));
     this.$('btnFw').addEventListener('click', () => this.hooks.onFirework());
     this.$('btnShot').addEventListener('click', () => this.hooks.onShot());
     this.$('btnFull').addEventListener('click', () => this.hooks.onFullscreen());
@@ -247,6 +276,14 @@ export class UIManager {
     this.$('shotModal').addEventListener('click', (e) => {
       if (e.target === this.$('shotModal')) this.closeShot();
     });
+
+    this.root.querySelectorAll<HTMLElement>('[data-weather]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const id = b.dataset.weather as WeatherId;
+        this.hooks.onWeather(id);
+        this.syncWeather(id);
+      }),
+    );
 
     this.root.querySelectorAll<HTMLElement>('[data-preset]').forEach((b) =>
       b.addEventListener('click', () => {
@@ -332,13 +369,20 @@ export class UIManager {
     });
   }
 
-  toggle(which: 'time' | 'audio' | null, force = false) {
+  toggle(which: 'time' | 'audio' | 'weather' | null, force = false) {
     this.open = this.open === which && !force ? null : which;
     this.$('timePanel').classList.toggle('open', this.open === 'time');
+    this.$('weatherPanel').classList.toggle('open', this.open === 'weather');
     this.$('audioPanel').classList.toggle('open', this.open === 'audio');
     this.$('btnTime').classList.toggle('active', this.open === 'time');
+    this.$('btnWeather').classList.toggle('active', this.open === 'weather');
     this.$('btnSound').classList.toggle('active', this.open === 'audio');
     if (this.open === 'time') this.refreshPresetTimes();
+  }
+
+  /** 同步天气面板的选中态（点击与初始 URL 参数共用） */
+  syncWeather(id: WeatherId) {
+    this.root.querySelectorAll('[data-weather]').forEach((x) => x.classList.toggle('active', (x as HTMLElement).dataset.weather === id));
   }
 
   private refreshPresetTimes() {

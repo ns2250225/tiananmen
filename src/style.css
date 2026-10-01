@@ -715,6 +715,30 @@ button {
   color: #ff6a5a;
 }
 
+/* 天气面板：3 列两行 */
+.weather-presets {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.preset[data-wico='auto'] .preset-ico {
+  color: #fff;
+}
+.preset[data-wico='sunny'] .preset-ico {
+  color: #ffde59;
+}
+.preset[data-wico='cloudy'] .preset-ico {
+  color: #9fd8ff;
+}
+.preset[data-wico='overcast'] .preset-ico {
+  color: #b8c4d4;
+}
+.preset[data-wico='rain'] .preset-ico {
+  color: #6fa8dc;
+}
+.preset[data-wico='snow'] .preset-ico {
+  color: #e8f2ff;
+}
+
 .preset-label {
   font-size: 13px;
   font-weight: 700;
@@ -930,6 +954,7 @@ button {
   inset: 0;
   display: grid;
   place-items: center;
+  padding: max(12px, var(--safe-t)) max(12px, var(--safe-r)) max(12px, var(--safe-b)) max(12px, var(--safe-l));
   background: rgba(2, 4, 12, 0.72);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
@@ -944,9 +969,14 @@ button {
   pointer-events: auto !important;
 }
 
+/* 卡片限高、内部滚动，任何屏幕（含手机横屏）都不会溢出或关不掉 */
 .modal-card {
-  width: min(880px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  width: min(880px, 100%);
+  max-height: 100%;
   padding: 16px;
+  overflow: auto;
   background: var(--glass-strong);
   transform: scale(0.97);
   transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -956,10 +986,17 @@ button {
   transform: none;
 }
 
+.modal-card .panel-head,
+.modal-card .modal-actions,
+.modal-card .modal-hint {
+  flex-shrink: 0;
+}
+
 .modal-card img {
   display: block;
+  flex: 0 1 auto;
+  min-height: 0;
   width: 100%;
-  max-height: 62vh;
   object-fit: contain;
   image-rendering: pixelated;
   background: #000;

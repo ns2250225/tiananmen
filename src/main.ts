@@ -5,7 +5,7 @@ import { computeEnv, Env } from './core/env';
 import { EventManager, RandomEventManager } from './core/events';
 import { DAY, HOUR, clamp, fmtHM, hm, lerp, rand, randInt, wrapDay } from './core/math';
 import { BJDate, PHASE_LABEL, TimeManager } from './core/time';
-import { WeatherManager } from './core/weather';
+import { WEATHER_LABEL, WeatherId, WeatherManager } from './core/weather';
 import { CN_FONT, drawPixelDigits, pixelDigitsWidth } from './render/canvas';
 import { ceremonyState, CeremonyState, RAISE } from './scene/ceremony';
 import { buildFlagFrames } from './scene/flag';
@@ -32,6 +32,8 @@ const time = new TimeManager(dateOverride, startAt);
 const ndParam = params.get('nd');
 const nd = ndParam === '1' ? true : ndParam === '0' ? false : time.isNationalDay;
 const weather = new WeatherManager();
+const weatherParam = params.get('weather') as WeatherId | null;
+if (weatherParam && weatherParam in WEATHER_LABEL) weather.setMode(weatherParam);
 const events = new EventManager();
 const randomEvents = new RandomEventManager();
 const audio = new AudioManager();
@@ -78,7 +80,7 @@ function trackGradient() {
   const stops: string[] = [];
   for (let i = 0; i <= 48; i++) {
     const t = wrapDay(4 * HOUR + (i / 48) * DAY);
-    const e = computeEnv(t, time.sunrise, time.sunset, time.moonPhase, scene.L, nd);
+    const e = computeEnv(t, time.sunrise, time.sunset, time.moonPhase, scene.L, nd, weather.state);
     stops.push(`${css(mix(e.skyTop, e.skyHor, 0.55))} ${((i / 48) * 100).toFixed(1)}%`);
   }
   return `linear-gradient(90deg, ${stops.join(',')})`;
@@ -118,6 +120,10 @@ const ui: UIManager = new UIManager(
       else time.setSimulationTime(presetTime(id), 2);
       if (id === 'fireworks') setTimeout(() => scene.fireworks.burst(), 2200);
     },
+    onWeather(id) {
+      weather.setMode(id);
+      ui.toast(id === 'auto' ? '天气：自动（随时间变化）' : `天气：${WEATHER_LABEL[id]}`);
+    },
     onScrub(sec) {
       time.setSimulationTime(sec);
     },
@@ -137,6 +143,7 @@ const ui: UIManager = new UIManager(
   },
   { nd, year: time.date.year, levels, mobile: isMobile },
 );
+ui.syncWeather(weather.mode);
 
 // ———————————————— 事件 ————————————————
 scene.fireworks.onLaunch = (x) => audio.launch((x / scene.L.W) * 2 - 1);
@@ -156,7 +163,7 @@ events.on('FIREWORK', () => ui.toast('国庆庆典艺术场景 · 烟花开始')
 
 const notCeremony = () => !lastCer || lastCer.hold < 0.2;
 const env = () => lastEnv!;
-randomEvents.add('pigeons', 30, 90, () => env().daylight > 0.4 && notCeremony(), () => {
+randomEvents.add('pigeons', 30, 90, () => env().daylight > 0.4 && env().gloom < 0.5 && notCeremony(), () => {
   scene.birds.spawn();
   audio.flap();
 });
@@ -164,12 +171,12 @@ randomEvents.add('gust', 40, 120, () => true, () => {
   weather.gustNow();
   scene.fx.leavesBurst(randInt(10, 24));
 });
-randomEvents.add('surge', 120, 240, () => env().daylight > 0.5 && notCeremony(), () => scene.crowd.surge());
+randomEvents.add('surge', 120, 240, () => env().daylight > 0.5 && env().gloom < 0.5 && notCeremony(), () => scene.crowd.surge());
 randomEvents.add('photos', 45, 120, () => notCeremony(), () => scene.crowd.photoSpree());
-randomEvents.add('cloudSun', 120, 300, () => env().daylight > 0.6 && env().sunVis > 0.5, () => scene.clouds.coverSun(env()));
-randomEvents.add('kidRun', 60, 150, () => env().daylight > 0.3 && notCeremony(), () => scene.crowd.kidRun());
+randomEvents.add('cloudSun', 120, 300, () => env().daylight > 0.6 && env().sunVis > 0.5 && env().gloom < 0.25, () => scene.clouds.coverSun(env()));
+randomEvents.add('kidRun', 60, 150, () => env().daylight > 0.3 && env().gloom < 0.5 && notCeremony(), () => scene.crowd.kidRun());
 randomEvents.add('waveFlags', 60, 120, () => notCeremony(), () => scene.crowd.waveAll());
-randomEvents.add('meteor', 40, 120, () => env().night > 0.85, () => scene.fx.meteor());
+randomEvents.add('meteor', 40, 120, () => env().night > 0.85 && env().gloom < 0.3, () => scene.fx.meteor());
 randomEvents.add('plane', 90, 240, () => true, () => scene.fx.plane());
 
 // ———————————————— 交互 & 彩蛋 ————————————————
@@ -225,6 +232,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'f' || e.key === 'F') toggleFullscreen();
   else if (e.key === 'm' || e.key === 'M') ui.setMute(audio.cycleMute());
   else if (e.key === 't' || e.key === 'T') ui.toggle('time');
+  else if (e.key === 'w' || e.key === 'W') ui.toggle('weather');
   else if (e.key === ' ') {
     e.preventDefault();
     scene.fireworks.launch();
@@ -238,7 +246,8 @@ function saveMoment() {
   const k = Math.max(2, Math.ceil(1600 / L.W));
   const W = L.W * k;
   const H = L.H * k;
-  const fh = Math.round(Math.max(120, H * 0.15));
+  // 竖屏（手机）时画面窄高，落款带按宽度限高，避免元素挤成一团
+  const fh = Math.round(Math.max(96, Math.min(H * 0.15, W * 0.42)));
   const out = document.createElement('canvas');
   out.width = W;
   out.height = H + fh;
@@ -255,27 +264,59 @@ function saveMoment() {
   c.globalAlpha = 0.12;
   for (let x = 0; x < W; x += k * 4) c.fillRect(x, H + fh - k * 2, k * 2, k);
   c.globalAlpha = 1;
-  const pad = Math.round(fh * 0.28);
-  const fs = Math.round(fh / 34);
-  c.drawImage(shotFlag, pad, H + Math.round(fh / 2 - (shotFlag.height * fs) / 2), shotFlag.width * fs, shotFlag.height * fs);
-  const tx = pad + shotFlag.width * fs + pad * 0.7;
-  c.textBaseline = 'alphabetic';
-  c.fillStyle = '#FFD75A';
-  c.font = `900 ${Math.round(fh * 0.27)}px ${CN_FONT}`;
-  c.fillText('十月一日 · 国庆节', tx, H + fh * 0.48);
-  c.fillStyle = '#F8E8D0';
-  c.font = `500 ${Math.round(fh * 0.17)}px ${CN_FONT}`;
-  c.fillText('北京 · 天安门', tx, H + fh * 0.78);
+
   const tstr = fmtHM(time.getCurrentTime());
-  const px = Math.max(3, Math.round(fh * 0.07));
-  const tw = pixelDigitsWidth(tstr, px);
-  drawPixelDigits(c, tstr, W - pad - tw, H + fh * 0.2, px, '#FFD75A');
-  c.fillStyle = 'rgba(248,232,208,0.85)';
-  c.font = `500 ${Math.round(fh * 0.13)}px ${CN_FONT}`;
   const d = time.date;
   const label = `${time.simulated ? '模拟时间' : '北京时间'} ${d.year}.${String(d.month).padStart(2, '0')}.${String(d.day).padStart(2, '0')}`;
+  const pad = Math.round(fh * 0.24);
+  const avail = W - pad * 2;
+
+  // 落款两行布局：行1 旗+标题（左）… 时钟（右）；行2 副标题（左）… 日期（右）。
+  // 字号先按带高取值，再按内容总宽整体收缩，保证任意宽高比下都不重叠、不溢出。
+  let flagS = (fh * 0.5) / shotFlag.height;
+  let titleFs = fh * 0.24;
+  let clockPx = fh * 0.07;
+  const titleStr = '十月一日 · 国庆节';
+  const needRow1 = () => {
+    c.font = `900 ${titleFs}px ${CN_FONT}`;
+    const tw = c.measureText(titleStr).width;
+    return shotFlag.width * flagS + pad * 0.7 + tw + pad + pixelDigitsWidth(tstr, clockPx);
+  };
+  let s1 = Math.min(1, avail / needRow1());
+  flagS *= s1;
+  titleFs *= s1;
+  clockPx *= s1;
+
+  let subFs = fh * 0.15;
+  let dateFs = fh * 0.12;
+  const subStr = '北京 · 天安门';
+  const needRow2 = () => {
+    c.font = `500 ${subFs}px ${CN_FONT}`;
+    const sw = c.measureText(subStr).width;
+    c.font = `500 ${dateFs}px ${CN_FONT}`;
+    return sw + pad + c.measureText(label).width;
+  };
+  let s2 = Math.min(1, avail / needRow2());
+  subFs *= s2;
+  dateFs *= s2;
+
+  const row1 = H + fh * 0.44;
+  const row2 = H + fh * 0.8;
+  const flagH = shotFlag.height * flagS;
+  c.drawImage(shotFlag, pad, Math.round(H + fh / 2 - flagH / 2), Math.round(shotFlag.width * flagS), Math.round(flagH));
+  const tx = pad + shotFlag.width * flagS + pad * 0.7;
+  c.textBaseline = 'alphabetic';
+  c.fillStyle = '#FFD75A';
+  c.font = `900 ${Math.round(titleFs)}px ${CN_FONT}`;
+  c.fillText(titleStr, tx, row1);
+  const clockW = pixelDigitsWidth(tstr, clockPx);
+  drawPixelDigits(c, tstr, W - pad - clockW, Math.round(row1 - 6.1 * clockPx), clockPx, '#FFD75A');
+  c.fillStyle = '#F8E8D0';
+  c.font = `500 ${Math.round(subFs)}px ${CN_FONT}`;
+  c.fillText(subStr, tx, row2);
+  c.font = `500 ${Math.round(dateFs)}px ${CN_FONT}`;
   const lw = c.measureText(label).width;
-  c.fillText(label, W - pad - lw, H + fh * 0.84);
+  c.fillText(label, W - pad - lw, row2);
   out.toBlob((blob) => {
     if (!blob) return ui.toast('截图失败');
     ui.showShot(URL.createObjectURL(blob));
@@ -313,7 +354,7 @@ function frame(ts: number) {
   const t = time.update();
   const fast = time.fast;
   const L = scene.L;
-  const e = computeEnv(t, time.sunrise, time.sunset, time.moonPhase, L, nd);
+  const e = computeEnv(t, time.sunrise, time.sunset, time.moonPhase, L, nd, weather.state);
   const cer = ceremonyState(t, time.sunrise, time.sunset, L);
   lastEnv = e;
   lastCer = cer;
@@ -343,7 +384,7 @@ function frame(ts: number) {
   // 音频
   if (entered) {
     const marching = !fast && cer.guards.some((g) => g.moving);
-    audio.update({ dt, wind: weather.wind, crowd: scene.crowd.npcs.length / 120, daylight: e.daylight, night: e.night, hold: cer.hold, marching });
+    audio.update({ dt, wind: weather.wind, crowd: scene.crowd.npcs.length / 120, daylight: e.daylight, night: e.night, hold: cer.hold, marching, rain: e.precip === 1 ? e.precipI : 0 });
     if (cer.anthem && !fast && !time.transitioning) audio.playAnthem(cer.anthemOffset);
     else if (audio.anthemPlaying) audio.stopAnthem();
   }
@@ -377,7 +418,7 @@ resize();
 // 预热：让人群、云提前就位
 {
   const t = time.update();
-  const e = computeEnv(t, time.sunrise, time.sunset, time.moonPhase, scene.L, nd);
+  const e = computeEnv(t, time.sunrise, time.sunset, time.moonPhase, scene.L, nd, weather.state);
   const target = scene.crowdTarget(e, QUALITIES[tier]);
   for (let i = 0; scene.crowd.npcs.length < target && i < 200; i++) scene.crowd.spawnGroup('inside');
   scene.lightLevel = e.lightTarget;

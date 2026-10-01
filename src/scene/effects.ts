@@ -1,6 +1,6 @@
 import { css, mix, RGB } from '../core/color';
 import { Env } from '../core/env';
-import { chance, pick, rand, randInt } from '../core/math';
+import { chance, clamp, pick, rand, randInt } from '../core/math';
 import { Layout } from './layout';
 
 // ———————————————————— 鸽子 ————————————————————
@@ -211,6 +211,132 @@ export class SkyEffects {
       c.fillRect(Math.round(l.x + ox), Math.round(l.y), flip ? 2 : 1, 1);
     }
     c.globalAlpha = 1;
+  }
+}
+
+// ———————————————————— 雨 / 雪 ————————————————————
+interface Drop {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  len: number;
+  ground: number;
+}
+interface Flake {
+  x: number;
+  y: number;
+  vy: number;
+  ph: number;
+  ps: number;
+  big: boolean;
+  ground: number;
+}
+interface Splash {
+  x: number;
+  y: number;
+  t: number;
+}
+
+/** 降水粒子：雨（斜落快线 + 地面溅点）与雪（缓落飘摆），数量随强度与画质档伸缩 */
+export class Precip {
+  private drops: Drop[] = [];
+  private flakes: Flake[] = [];
+  private splashes: Splash[] = [];
+  private L!: Layout;
+
+  resize(L: Layout) {
+    this.L = L;
+    this.drops = [];
+    this.flakes = [];
+    this.splashes = [];
+  }
+
+  update(dt: number, wind: number, kind: 0 | 1 | 2, intensity: number, cap: number) {
+    const L = this.L;
+    const rainN = kind === 1 ? Math.round(intensity * cap * 0.5) : 0;
+    const snowN = kind === 2 ? Math.round(intensity * cap * 0.32) : 0;
+    if (kind !== 1 && this.drops.length) this.drops.length = 0;
+    if (kind !== 2 && this.flakes.length) this.flakes.length = 0;
+    const speedK = clamp(Math.max(1, L.H / 360), 1, 2.2);
+    while (this.drops.length < rainN) {
+      this.drops.push({
+        x: rand(-40, L.W + 40),
+        y: rand(-L.H, L.H),
+        vx: wind * 70 + rand(-8, 14),
+        vy: rand(300, 430) * speedK,
+        len: rand(3, 6),
+        ground: rand(L.squareTop + 24, L.H - 2),
+      });
+    }
+    if (this.drops.length > rainN) this.drops.length = rainN;
+    while (this.flakes.length < snowN) {
+      this.flakes.push({
+        x: rand(-20, L.W + 20),
+        y: rand(-L.H, L.H),
+        vy: rand(16, 38) * speedK * 0.8,
+        ph: rand(0, 6.28),
+        ps: rand(0.5, 1.4),
+        big: chance(0.18),
+        ground: rand(L.squareTop + 10, L.H - 2),
+      });
+    }
+    if (this.flakes.length > snowN) this.flakes.length = snowN;
+
+    for (const d of this.drops) {
+      d.x += d.vx * dt;
+      d.y += d.vy * dt;
+      if (d.y >= d.ground) {
+        if (d.x > 0 && d.x < L.W && chance(0.3)) this.splashes.push({ x: d.x, y: d.ground, t: 0.16 });
+        d.y = rand(-60, -4);
+        d.x = rand(-40, L.W + 40);
+      }
+      if (d.x < -50) d.x += L.W + 90;
+      else if (d.x > L.W + 50) d.x -= L.W + 90;
+    }
+    for (const f of this.flakes) {
+      f.ph += dt * f.ps;
+      f.x += (Math.sin(f.ph) * 9 + wind * 26) * dt;
+      f.y += f.vy * dt;
+      if (f.y >= f.ground) {
+        f.y = rand(-40, -4);
+        f.x = rand(-20, L.W + 20);
+      }
+      if (f.x < -30) f.x += L.W + 50;
+      else if (f.x > L.W + 30) f.x -= L.W + 50;
+    }
+    for (const s of this.splashes) s.t -= dt;
+    this.splashes = this.splashes.filter((s) => s.t > 0);
+  }
+
+  draw(c: CanvasRenderingContext2D, ox: number, daylight: number) {
+    if (this.drops.length) {
+      c.fillStyle = daylight > 0.35 ? 'rgba(150,175,215,0.55)' : 'rgba(185,205,240,0.42)';
+      for (const d of this.drops) {
+        const x = Math.round(d.x + ox);
+        const y = Math.round(d.y);
+        const sx = Math.sign(d.vx);
+        for (let i = 0; i < d.len; i++) c.fillRect(x + (i > 1 ? sx : 0), y - i, 1, 1);
+      }
+      c.fillStyle = daylight > 0.35 ? 'rgba(170,195,230,0.5)' : 'rgba(200,215,245,0.35)';
+      for (const s of this.splashes) {
+        const w = s.t > 0.08 ? 2 : 1;
+        c.fillRect(Math.round(s.x + ox) - w, Math.round(s.y), w * 2, 1);
+      }
+    }
+    if (this.flakes.length) {
+      for (const f of this.flakes) {
+        const a = 0.55 + 0.35 * Math.sin(f.ph * 2.3);
+        c.fillStyle = `rgba(245,248,255,${a.toFixed(2)})`;
+        const x = Math.round(f.x + ox);
+        const y = Math.round(f.y);
+        c.fillRect(x, y, 1, 1);
+        if (f.big) {
+          c.fillRect(x + 1, y, 1, 1);
+          c.fillRect(x, y + 1, 1, 1);
+        }
+      }
+    }
   }
 }
 

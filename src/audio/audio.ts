@@ -15,6 +15,8 @@ export interface AudioFrame {
   night: number;
   hold: number;
   marching: boolean;
+  /** 降雨强度 0..1（雪天为 0） */
+  rain: number;
 }
 
 /**
@@ -38,6 +40,7 @@ export class AudioManager {
   private crowdGain!: GainNode;
   private crowdFilter!: BiquadFilterNode;
   private nightGain!: GainNode;
+  private rainGain!: GainNode;
   private anthemBuf: AudioBuffer | null = null;
   private anthemSrc: AudioBufferSourceNode | null = null;
   private anthemGain: GainNode | null = null;
@@ -129,6 +132,21 @@ export class AudioManager {
     nightLp.connect(this.nightGain);
     this.nightGain.connect(this.amb);
 
+    // 雨声：宽带噪声经带通得到沙沙雨幕
+    const rainBp = ctx.createBiquadFilter();
+    rainBp.type = 'bandpass';
+    rainBp.frequency.value = 2800;
+    rainBp.Q.value = 0.35;
+    const rainLp = ctx.createBiquadFilter();
+    rainLp.type = 'lowpass';
+    rainLp.frequency.value = 5200;
+    this.rainGain = ctx.createGain();
+    this.rainGain.gain.value = 0;
+    this.loopNoise(3.9).connect(rainBp);
+    rainBp.connect(rainLp);
+    rainLp.connect(this.rainGain);
+    this.rainGain.connect(this.amb);
+
     void this.loadAnthem();
     document.addEventListener('visibilitychange', () => {
       if (!this.ctx) return;
@@ -201,11 +219,12 @@ export class AudioManager {
     const crowd = clamp(f.crowd) * (1 - f.hold * 0.85);
     this.crowdGain.gain.setTargetAtTime(crowd * 0.55 * this.crowdMod, t, 0.5);
     this.nightGain.gain.setTargetAtTime(f.night * 0.18, t, 1);
+    this.rainGain.gain.setTargetAtTime(f.rain * 0.42, t, 0.8);
 
-    // 鸟叫（白天，清晨更多）
+    // 鸟叫（白天，清晨更多；雨天躲雨不叫）
     this.birdT -= f.dt;
     if (this.birdT <= 0) {
-      if (f.daylight > 0.3 && f.hold < 0.5) this.chirp();
+      if (f.daylight > 0.3 && f.hold < 0.5 && f.rain < 0.2) this.chirp();
       this.birdT = rand(2, 7) / Math.max(0.3, f.daylight);
     }
     // 秋虫（夜晚）

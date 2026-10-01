@@ -4,7 +4,7 @@ import { clamp, lerp } from '../core/math';
 import { glowSprite, makeCanvas } from '../render/canvas';
 import { CeremonyState } from './ceremony';
 import { CrowdManager } from './crowd';
-import { Birds, SkyEffects, Traffic } from './effects';
+import { Birds, Precip, SkyEffects, Traffic } from './effects';
 import { FireworkManager } from './fireworks';
 import { buildFlagFrames, buildSmallFlags, FLAG_FRAMES, FLAG_H, FLAG_PAD } from './flag';
 import { buildFlowerBed, buildGround, buildPlanter, drawLamp, drawPole, drawPoleBase, Lamp, layoutLamps } from './ground';
@@ -70,6 +70,7 @@ export class SceneManager {
   crowd = new CrowdManager();
   birds = new Birds();
   fx = new SkyEffects();
+  precip = new Precip();
   traffic = new Traffic();
   private structure!: StructureSprites;
   private ground!: HTMLCanvasElement;
@@ -108,6 +109,7 @@ export class SceneManager {
     this.fireworks.resize(L);
     this.birds.resize(L);
     this.fx.resize(L);
+    this.precip.resize(L);
     this.traffic.resize(L);
     const obstacles = [
       { x0: L.poleX - 26, y0: L.poleBaseY - 10, x1: L.poleX + 26, y1: L.poleBaseY + 5 },
@@ -146,13 +148,18 @@ export class SceneManager {
     this.camX = lerp(this.camX, Math.sin(f.now / 37) * 2.5 + this.pointerX * 6, Math.min(1, dt * 1.5));
     this.flagAnim += dt * [6, 9, 12][f.flagLevel];
 
-    this.clouds.setCount(Math.round(f.quality.clouds * (0.5 + f.env.daylight * 0.2 + 0.6 * clamp(f.wind))));
+    // 云量：风 + 白天占比之外，再乘天气云量系数（阴雨天的云可达平日的两倍多）
+    const cloudK = 0.55 + clamp(f.env.cloudCover, 0, 1.6) * 0.75;
+    this.clouds.setCount(
+      Math.round(clamp(f.quality.clouds * (0.5 + f.env.daylight * 0.2 + 0.6 * clamp(f.wind)) * cloudK, 2, f.quality.clouds * 2.6)),
+    );
     this.clouds.update(dt, f.wind);
     this.sunCover = lerp(this.sunCover, this.clouds.sunCover(env, this.camX), Math.min(1, dt * 1.2));
     this.fireworks.cap = f.quality.particles;
     this.fireworks.update(dt, env.fireworkLevel, f.fast);
     this.birds.update(dt);
     this.fx.update(dt, f.wind);
+    this.precip.update(dt, f.wind, env.precip, env.precipI, f.quality.particles);
     this.traffic.update(dt, env.traffic, f.cer.traffic);
     this.crowd.update({ L: this.L, dt, env, cer: f.cer, target: this.crowdTarget(env, f.quality) + crowdExtra, nd: f.nd, fast: f.fast });
     for (const fl of this.flashes) fl.life -= dt;
@@ -351,6 +358,9 @@ export class SceneManager {
       c.drawImage(this.fireworks.canvas, 1, 2);
       c.restore();
     }
+
+    // ——— 雨 / 雪（最上层氛围粒子，含轻微视差）———
+    if (env.precipI > 0.01) this.precip.draw(c, o(0.9), env.daylight);
 
     c.drawImage(this.vignette, 0, 0);
   }

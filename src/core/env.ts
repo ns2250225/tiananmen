@@ -1,6 +1,7 @@
 import { RGB, hex, mix, sampleKeys, Key, lerpNum } from './color';
 import { DAY, HOUR, bump, clamp, hm, smoothstep, wrapDay } from './math';
 import { Phase, phaseOf } from './time';
+import { WeatherState } from './weather';
 import { Layout } from '../scene/layout';
 
 /** 每帧由时间推导出的环境参数（昼夜光影系统的核心） */
@@ -36,6 +37,11 @@ export interface Env {
   fireworkLevel: number;
   /** 阴影水平偏移方向 */
   shadowDx: number;
+  /** 天气：阴沉度 / 云量系数 / 降水 */
+  gloom: number;
+  cloudCover: number;
+  precip: 0 | 1 | 2;
+  precipI: number;
 }
 
 type Anchor = 'm' | 'e' | '-';
@@ -120,11 +126,11 @@ const C_NIGHT_HI = hex('#46557F'),
   C_NIGHT_MID = hex('#2A3762'),
   C_NIGHT_LO = hex('#1A2448');
 
-export function computeEnv(t: number, sunrise: number, sunset: number, moonPhase: number, L: Layout, nd: boolean): Env {
+export function computeEnv(t: number, sunrise: number, sunset: number, moonPhase: number, L: Layout, nd: boolean, w?: WeatherState): Env {
   const keys = buildKeys(sunrise, sunset);
-  const skyTop = sampleKeys(keys.top, t, mix);
-  const skyHor = sampleKeys(keys.hor, t, mix);
-  const ambient = sampleKeys(keys.amb, t, mix);
+  let skyTop = sampleKeys(keys.top, t, mix);
+  let skyHor = sampleKeys(keys.hor, t, mix);
+  let ambient = sampleKeys(keys.amb, t, mix);
 
   const dr = smoothstep(sunrise - 45 * 60, sunrise + 30 * 60, t);
   const ds = 1 - smoothstep(sunset - 30 * 60, sunset + 45 * 60, t);
@@ -156,13 +162,36 @@ export function computeEnv(t: number, sunrise: number, sunset: number, moonPhase
 
   const starAlpha = smoothstep(0.55, 0.95, night);
 
+  // ——— 天气调制：阴沉度 gloom 压暗去饱和天空，遮蔽日星月 ———
+  const gloom = w?.gloom ?? 0;
+  const gr = (c: RGB, k: number): RGB => {
+    const g = c[0] * 0.32 + c[1] * 0.45 + c[2] * 0.23;
+    return mix(c, [g, g * 1.03, g * 1.1], k);
+  };
+  const darken = (c: RGB, k: number): RGB => mix(c, [c[0] * 0.52, c[1] * 0.55, c[2] * 0.62], k);
+  if (gloom > 0.001) {
+    skyTop = gr(skyTop, gloom * 0.75);
+    skyHor = gr(skyHor, gloom * 0.65);
+    ambient = darken(ambient, gloom * 0.22);
+  }
+  const visK = 1 - gloom;
+  const sunVis2 = sunVis * visK;
+  const moonVis2 = moonVis * Math.pow(visK, 1.6);
+  const starAlpha2 = starAlpha * visK * (1 - (w?.precipI ?? 0) * 0.5);
+
   let cloudHi = mix(C_NIGHT_HI, C_DAY_HI, daylight);
   let cloudMid = mix(C_NIGHT_MID, C_DAY_MID, daylight);
   let cloudLo = mix(C_NIGHT_LO, C_DAY_LO, daylight);
-  const w = warm * 0.85;
-  cloudHi = mix(cloudHi, C_WARM_HI, w);
-  cloudMid = mix(cloudMid, C_WARM_MID, w);
-  cloudLo = mix(cloudLo, C_WARM_LO, w);
+  const wWarm = warm * Math.pow(visK, 1.5) * 0.85;
+  cloudHi = mix(cloudHi, C_WARM_HI, wWarm);
+  cloudMid = mix(cloudMid, C_WARM_MID, wWarm);
+  cloudLo = mix(cloudLo, C_WARM_LO, wWarm);
+  if (gloom > 0.001) {
+    // 云体随阴沉度变灰变暗，接近雨云
+    cloudHi = gr(cloudHi, gloom * 0.7);
+    cloudMid = darken(cloudMid, gloom * 0.55);
+    cloudLo = darken(cloudLo, gloom * 0.4);
+  }
 
   // 建筑灯光：日落后 15 分钟亮起，23:30 后转为深夜低亮度
   let lightTarget = 0;
@@ -170,6 +199,8 @@ export function computeEnv(t: number, sunrise: number, sunset: number, moonPhase
 
   let crowdTarget = sampleKeys(crowdKeys, t, lerpNum);
   if (nd) crowdTarget *= 1.3;
+  // 坏天气广场上的人明显变少
+  crowdTarget *= 1 - gloom * 0.45;
   const traffic = sampleKeys(trafficKeys, t, lerpNum);
 
   // 烟花：21:00–23:00 国庆庆典；国庆特别模式 19:30 起零星燃放
@@ -194,12 +225,12 @@ export function computeEnv(t: number, sunrise: number, sunset: number, moonPhase
     sunX,
     sunY,
     sunAlt,
-    sunVis,
+    sunVis: sunVis2,
     moonX,
     moonY,
-    moonVis,
+    moonVis: moonVis2,
     moonPhase,
-    starAlpha,
+    starAlpha: starAlpha2,
     cloudHi,
     cloudMid,
     cloudLo,
@@ -208,5 +239,9 @@ export function computeEnv(t: number, sunrise: number, sunset: number, moonPhase
     traffic,
     fireworkLevel,
     shadowDx,
+    gloom,
+    cloudCover: w?.cloud ?? 0.45,
+    precip: w?.precip ?? 0,
+    precipI: w?.precipI ?? 0,
   };
 }
