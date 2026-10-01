@@ -247,7 +247,7 @@ function saveMoment() {
   const W = L.W * k;
   const H = L.H * k;
   // 竖屏（手机）时画面窄高，落款带按宽度限高，避免元素挤成一团
-  const fh = Math.round(Math.max(96, Math.min(H * 0.15, W * 0.42)));
+  const fh = Math.round(Math.max(96, Math.min(H * 0.15, W * 0.3)));
   const out = document.createElement('canvas');
   out.width = W;
   out.height = H + fh;
@@ -272,7 +272,9 @@ function saveMoment() {
   const avail = W - pad * 2;
 
   // 落款两行布局：行1 旗+标题（左）… 时钟（右）；行2 副标题（左）… 日期（右）。
-  // 字号先按带高取值，再按内容总宽整体收缩，保证任意宽高比下都不重叠、不溢出。
+  // 字号先按带高取值，再按内容总宽整体收缩（留 6% 安全边距，吸收不同设备字体渲染差异），
+  // 行2 与行1 共用文字左起点，任意宽高比下都不重叠、不溢出。
+  const SAFE = 0.94;
   let flagS = (fh * 0.5) / shotFlag.height;
   let titleFs = fh * 0.24;
   let clockPx = fh * 0.07;
@@ -282,10 +284,11 @@ function saveMoment() {
     const tw = c.measureText(titleStr).width;
     return shotFlag.width * flagS + pad * 0.7 + tw + pad + pixelDigitsWidth(tstr, clockPx);
   };
-  let s1 = Math.min(1, avail / needRow1());
+  const s1 = Math.min(1, (avail * SAFE) / needRow1());
   flagS *= s1;
   titleFs *= s1;
   clockPx *= s1;
+  const tx = pad + shotFlag.width * flagS + pad * 0.7;
 
   let subFs = fh * 0.15;
   let dateFs = fh * 0.12;
@@ -294,9 +297,10 @@ function saveMoment() {
     c.font = `500 ${subFs}px ${CN_FONT}`;
     const sw = c.measureText(subStr).width;
     c.font = `500 ${dateFs}px ${CN_FONT}`;
-    return sw + pad + c.measureText(label).width;
+    return sw + pad * 0.6 + c.measureText(label).width;
   };
-  let s2 = Math.min(1, avail / needRow2());
+  // 行2 从 tx（与标题对齐）开始，可用宽度要扣掉旗帜占位
+  const s2 = Math.min(1, ((W - pad - tx) * SAFE) / needRow2());
   subFs *= s2;
   dateFs *= s2;
 
@@ -304,7 +308,6 @@ function saveMoment() {
   const row2 = H + fh * 0.8;
   const flagH = shotFlag.height * flagS;
   c.drawImage(shotFlag, pad, Math.round(H + fh / 2 - flagH / 2), Math.round(shotFlag.width * flagS), Math.round(flagH));
-  const tx = pad + shotFlag.width * flagS + pad * 0.7;
   c.textBaseline = 'alphabetic';
   c.fillStyle = '#FFD75A';
   c.font = `900 ${Math.round(titleFs)}px ${CN_FONT}`;
